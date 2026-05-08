@@ -6,8 +6,9 @@ import { getApiKey, API_BASE, DEFAULT_MODEL } from "./gemini-api.js";
 import { isGeminiWebAvailable, queryWithCookies } from "./gemini-web.js";
 import { isPerplexityAvailable, searchWithPerplexity, type SearchResult, type SearchResponse, type SearchOptions } from "./perplexity.js";
 import { hasExaApiKey, isExaAvailable, searchWithExa } from "./exa.js";
+import { isTavilyAvailable, searchWithTavily } from "./tavily.js";
 
-export type SearchProvider = "auto" | "perplexity" | "gemini" | "exa";
+export type SearchProvider = "auto" | "perplexity" | "gemini" | "exa" | "tavily";
 export type ResolvedSearchProvider = Exclude<SearchProvider, "auto">;
 
 export interface AttributedSearchResponse extends SearchResponse {
@@ -57,7 +58,7 @@ function normalizeSearchModel(value: unknown): string | undefined {
 
 function normalizeSearchProvider(value: unknown): SearchProvider {
 	const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
-	return normalized === "auto" || normalized === "perplexity" || normalized === "gemini" || normalized === "exa"
+	return normalized === "auto" || normalized === "perplexity" || normalized === "gemini" || normalized === "exa" || normalized === "tavily"
 		? normalized
 		: "auto";
 }
@@ -124,25 +125,17 @@ export async function search(query: string, options: FullSearchOptions = {}): Pr
 		);
 	}
 
-	if (provider === "exa") {
-		const exaApiKeyConfigured = hasExaApiKey();
+	if (provider === "exa" || provider === "auto") {
 		try {
 			const result = await searchWithExa(query, options);
 			if (result && "exhausted" in result) {
-				throw new Error(
-					"Exa monthly free tier exhausted (1,000 requests). Resets next month.\n" +
-					"  Use provider: 'perplexity' or 'gemini', or upgrade at exa.ai/pricing"
-				);
+				throw new Error("Exa quota exhausted");
 			}
 			if (result && "answer" in result) return { ...result, provider: "exa" };
-			if (exaApiKeyConfigured) {
-				throw new Error("Exa search returned no results.");
-			}
+			// null → MCPもAPIも失敗、フォールバックチェーンへ継続
 		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err);
-			if (message.toLowerCase().includes("abort")) throw err;
-			if (exaApiKeyConfigured) throw err;
-			// No API key: allow provider fallback.
+			if (isAbortError(err)) throw err;
+			// abort以外はフォールバックチェーンへ継続
 		}
 	}
 
@@ -155,6 +148,16 @@ export async function search(query: string, options: FullSearchOptions = {}): Pr
 		} catch (err) {
 			if (isAbortError(err)) throw err;
 			fallbackErrors.push(`Exa: ${errorMessage(err)}`);
+		}
+	}
+
+	if (isTavilyAvailable()) {
+		try {
+			const result = await searchWithTavily(query, options);
+			return { ...result, provider: "tavily" };
+		} catch (err) {
+			if (isAbortError(err)) throw err;
+			fallbackErrors.push(`Tavily: ${errorMessage(err)}`);
 		}
 	}
 
@@ -184,8 +187,9 @@ export async function search(query: string, options: FullSearchOptions = {}): Pr
 		"No search provider available. Either:\n" +
 		"  1. Set perplexityApiKey in ~/.pi/web-search.json\n" +
 		"  2. Set EXA_API_KEY (or exaApiKey) in ~/.pi/web-search.json\n" +
-		"  3. Set GEMINI_API_KEY in ~/.pi/web-search.json\n" +
-		"  4. Sign into gemini.google.com in a supported Chromium-based browser"
+		"  3. Set tavilyApiKey in ~/.pi/web-search.json\n" +
+		"  4. Set GEMINI_API_KEY in ~/.pi/web-search.json\n" +
+		"  5. Sign into gemini.google.com in a supported Chromium-based browser"
 	);
 }
 
