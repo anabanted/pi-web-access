@@ -5,11 +5,11 @@ import { activityMonitor } from "./activity.js";
 import { getApiKey, API_BASE, DEFAULT_MODEL } from "./gemini-api.js";
 import { isGeminiWebAvailable, queryWithCookies } from "./gemini-web.js";
 import { isPerplexityAvailable, searchWithPerplexity, type SearchResult, type SearchResponse, type SearchOptions } from "./perplexity.js";
-import { hasExaApiKey, isExaAvailable, searchWithExa } from "./exa.js";
+import { isExaApiAvailable, searchWithExa, searchWithExaMcp, tryExaApi, getApiKey as getExaApiKey } from "./exa.js";
 import { isTavilyAvailable, searchWithTavily } from "./tavily.js";
 import { isBraveAvailable, searchWithBrave } from "./brave.js";
 
-export type SearchProvider = "auto" | "perplexity" | "gemini" | "exa" | "tavily" | "brave";
+export type SearchProvider = "auto" | "perplexity" | "gemini" | "exa" | "exaApi" | "tavily" | "brave";
 export type ResolvedSearchProvider = Exclude<SearchProvider, "auto">;
 
 export interface AttributedSearchResponse extends SearchResponse {
@@ -59,7 +59,7 @@ function normalizeSearchModel(value: unknown): string | undefined {
 
 function normalizeSearchProvider(value: unknown): SearchProvider {
 	const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
-	return normalized === "auto" || normalized === "perplexity" || normalized === "gemini" || normalized === "exa" || normalized === "tavily" || normalized === "brave"
+	return normalized === "auto" || normalized === "perplexity" || normalized === "gemini" || normalized === "exa" || normalized === "exaApi" || normalized === "tavily" || normalized === "brave"
 		? normalized
 		: "auto";
 }
@@ -126,17 +126,38 @@ export async function search(query: string, options: FullSearchOptions = {}): Pr
 		);
 	}
 
-	if (provider === "exa" || provider === "auto") {
+	if (provider === "exa") {
+		// provider=exa 明示指定時は MCP→API 内部フォールバック
 		try {
 			const result = await searchWithExa(query, options);
 			if (result && "exhausted" in result) {
 				throw new Error("Exa quota exhausted");
 			}
 			if (result && "answer" in result) return { ...result, provider: "exa" };
-			// null → MCPもAPIも失敗、フォールバックチェーンへ継続
+			throw new Error("Exa search unavailable");
 		} catch (err) {
 			if (isAbortError(err)) throw err;
-			// abort以外はフォールバックチェーンへ継続
+			throw err;
+		}
+	}
+
+	if (provider === "exaApi") {
+		const apiKey = getExaApiKey();
+		if (!apiKey) throw new Error("Exa API key not found");
+		const result = await tryExaApi(query, apiKey, options);
+		if (result && "exhausted" in result) throw new Error("Exa API quota exhausted");
+		if (result && "answer" in result) return { ...result, provider: "exaApi" };
+		throw new Error("Exa API search unavailable");
+	}
+
+	if (provider === "auto") {
+		// 1. Exa MCP（常に試す、可用性チェック不要）
+		try {
+			const mcpResult = await searchWithExaMcp(query, options);
+			if (mcpResult) return { ...mcpResult, provider: "exa" };
+		} catch (err) {
+			if (isAbortError(err)) throw err;
+			// MCP失敗 → 次に進む
 		}
 	}
 
@@ -152,16 +173,18 @@ export async function search(query: string, options: FullSearchOptions = {}): Pr
 
 	const fallbackErrors: string[] = [];
 
-	if (provider !== "exa" && isExaAvailable()) {
+	// 2. Brave
+	if (isBraveAvailable()) {
 		try {
-			const result = await searchWithExa(query, options);
-			if (result && "answer" in result) return { ...result, provider: "exa" };
+			const result = await searchWithBrave(query, options);
+			return { ...result, provider: "brave" };
 		} catch (err) {
 			if (isAbortError(err)) throw err;
-			fallbackErrors.push(`Exa: ${errorMessage(err)}`);
+			fallbackErrors.push(`Brave: ${errorMessage(err)}`);
 		}
 	}
 
+	// 3. Tavily
 	if (isTavilyAvailable()) {
 		try {
 			const result = await searchWithTavily(query, options);
@@ -172,13 +195,21 @@ export async function search(query: string, options: FullSearchOptions = {}): Pr
 		}
 	}
 
-	if (isBraveAvailable()) {
+	// 4. Exa API
+	if (isExaApiAvailable()) {
 		try {
-			const result = await searchWithBrave(query, options);
-			return { ...result, provider: "brave" };
+			const apiKey = getExaApiKey();
+			if (apiKey) {
+				const result = await tryExaApi(query, apiKey, options);
+				if (result && "exhausted" in result) {
+					fallbackErrors.push("Exa API: quota exhausted");
+				} else if (result && "answer" in result) {
+					return { ...result, provider: "exaApi" };
+				}
+			}
 		} catch (err) {
 			if (isAbortError(err)) throw err;
-			fallbackErrors.push(`Brave: ${errorMessage(err)}`);
+			fallbackErrors.push(`Exa API: ${errorMessage(err)}`);
 		}
 	}
 

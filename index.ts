@@ -34,7 +34,7 @@ import { platform, homedir } from "node:os";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { isPerplexityAvailable } from "./perplexity.js";
-import { isExaAvailable } from "./exa.js";
+import { isExaApiAvailable } from "./exa.js";
 import { isTavilyAvailable } from "./tavily.js";
 import { isBraveAvailable } from "./brave.js";
 import { isGeminiApiAvailable } from "./gemini-api.js";
@@ -56,7 +56,7 @@ interface WebSearchConfig {
 
 interface ProviderAvailability {
 	perplexity: boolean;
-	exa: boolean;
+	exaApi: boolean;
 	gemini: boolean;
 	tavily: boolean;
 	brave: boolean;
@@ -118,7 +118,7 @@ function normalizeProviderInput(value: unknown): SearchProvider | undefined {
 	if (value === undefined) return undefined;
 	if (typeof value !== "string") return "auto";
 	const normalized = value.trim().toLowerCase();
-	if (normalized === "auto" || normalized === "exa" || normalized === "perplexity" || normalized === "gemini") {
+	if (normalized === "auto" || normalized === "exa" || normalized === "exaApi" || normalized === "perplexity" || normalized === "gemini" || normalized === "tavily" || normalized === "brave") {
 		return normalized;
 	}
 	return "auto";
@@ -156,7 +156,7 @@ async function getProviderAvailability(): Promise<ProviderAvailability> {
 	const geminiWebAvail = await isGeminiWebAvailable();
 	return {
 		perplexity: isPerplexityAvailable(),
-		exa: isExaAvailable(),
+		exaApi: isExaApiAvailable(),
 		gemini: isGeminiApiAvailable() || !!geminiWebAvail,
 		tavily: isTavilyAvailable(),
 		brave: isBraveAvailable(),
@@ -174,42 +174,14 @@ async function loadCuratorBootstrap(requestedProvider: unknown): Promise<Curator
 
 function resolveProvider(
 	requested: unknown,
-	available: ProviderAvailability,
+	_available: ProviderAvailability,
 ): ResolvedSearchProvider {
 	const provider = normalizeProviderInput(requested ?? loadConfig().provider ?? "auto") ?? "auto";
 
+	// autoは"exa"を返す（MCPを最初に試す）。実際のフォールバックはsearch()内で処理。
+	// 明示指定されたプロバイダは可用性に関わらずそのまま返す（search()でエラーになる）。
 	if (provider === "auto") {
-		if (available.exa) return "exa";
-		if (available.tavily) return "tavily";
-		if (available.brave) return "brave";
-		if (available.perplexity) return "perplexity";
-		if (available.gemini) return "gemini";
 		return "exa";
-	}
-	if (provider === "exa" && !available.exa) {
-		if (available.tavily) return "tavily";
-		if (available.perplexity) return "perplexity";
-		return available.gemini ? "gemini" : "exa";
-	}
-	if (provider === "tavily" && !available.tavily) {
-		if (available.exa) return "exa";
-		if (available.brave) return "brave";
-		if (available.perplexity) return "perplexity";
-		return available.gemini ? "gemini" : "tavily";
-	}
-	if (provider === "brave" && !available.brave) {
-		if (available.exa) return "exa";
-		if (available.tavily) return "tavily";
-		if (available.perplexity) return "perplexity";
-		return available.gemini ? "gemini" : "brave";
-	}
-	if (provider === "perplexity" && !available.perplexity) {
-		if (available.exa) return "exa";
-		return available.gemini ? "gemini" : "perplexity";
-	}
-	if (provider === "gemini" && !available.gemini) {
-		if (available.exa) return "exa";
-		return available.perplexity ? "perplexity" : "gemini";
 	}
 	return provider;
 }
@@ -1110,7 +1082,7 @@ export default function (pi: ExtensionAPI) {
 		name: "web_search",
 		label: "Web Search",
 		description:
-			`Search the web using Exa, Tavily, Brave, Perplexity AI, or Gemini. Returns an AI-synthesized answer with source citations. For comprehensive research, prefer queries (plural) with 2-4 varied angles over a single query — each query gets its own synthesized answer, so varying phrasing and scope gives much broader coverage. When includeContent is true, full page content is fetched in the background. Searches auto-open the interactive browser curator and stream results live; set workflow to "none" to skip curation. Provider auto-selects: Exa (MCP first, then API with key, or fallback), else Tavily (needs key), else Brave (needs key), else Perplexity (needs key), else Gemini API (needs key), else Gemini Web (needs a supported Chromium-based browser login).`,
+			`Search the web using Exa, Tavily, Brave, Perplexity AI, or Gemini. Returns an AI-synthesized answer with source citations. For comprehensive research, prefer queries (plural) with 2-4 varied angles over a single query — each query gets its own synthesized answer, so varying phrasing and scope gives much broader coverage. When includeContent is true, full page content is fetched in the background. Searches auto-open the interactive browser curator and stream results live; set workflow to "none" to skip curation. Provider auto-selects: Exa MCP (no key needed), else Brave (needs key), else Tavily (needs key), else Exa API (needs key), else Perplexity (needs key), else Gemini API (needs key), else Gemini Web (needs a supported Chromium-based browser login).`,
 		promptSnippet:
 			"Use for web research questions. Prefer {queries:[...]} with 2-4 varied angles over a single query for broader coverage.",
 		parameters: Type.Object({
@@ -1123,7 +1095,7 @@ export default function (pi: ExtensionAPI) {
 			),
 			domainFilter: Type.Optional(Type.Array(Type.String(), { description: "Limit to domains (prefix with - to exclude)" })),
 			provider: Type.Optional(
-				StringEnum(["auto", "perplexity", "gemini", "exa", "tavily", "brave"], { description: "Search provider (default: auto)" }),
+				StringEnum(["auto", "perplexity", "gemini", "exa", "exaApi", "tavily", "brave"], { description: "Search provider (default: auto). Auto order: Exa(MCP) → Brave → Tavily → Exa(API) → Perplexity → Gemini." }),
 			),
 			workflow: Type.Optional(
 				StringEnum(["none", "summary-review"], {

@@ -85,7 +85,7 @@ function normalizeApiKey(value: unknown): string | null {
 	return normalized.length > 0 ? normalized : null;
 }
 
-function getApiKey(): string | null {
+export function getApiKey(): string | null {
 	return normalizeApiKey(process.env.EXA_API_KEY) ?? normalizeApiKey(loadConfig().exaApiKey);
 }
 
@@ -366,7 +366,7 @@ function buildMcpQuery(query: string, options: ExaSearchOptions): string {
 	return parts.join(" ");
 }
 
-async function searchWithExaMcp(query: string, options: ExaSearchOptions = {}): Promise<SearchResponse | null> {
+export async function searchWithExaMcp(query: string, options: ExaSearchOptions = {}): Promise<SearchResponse | null> {
 	const enrichedQuery = buildMcpQuery(query, options);
 	const activityId = activityMonitor.logStart({ type: "api", query: enrichedQuery });
 
@@ -413,12 +413,17 @@ async function searchWithExaMcp(query: string, options: ExaSearchOptions = {}): 
 	}
 }
 
+/** 後方互換: APIキーがあり月制限未満ならtrue（MCPは呼び出し時に判定） */
 export function isExaAvailable(): boolean {
-	if (getApiKey()) {
-		const usage = readUsage();
-		return usage.count < MONTHLY_LIMIT;
-	}
-	return true;
+	return isExaApiAvailable();
+}
+
+/** APIはキーが必要 + 月制限未満。MCPの可用性は呼び出し時の成否で判断する */
+export function isExaApiAvailable(): boolean {
+	const apiKey = getApiKey();
+	if (!apiKey) return false;
+	const usage = readUsage();
+	return usage.count < MONTHLY_LIMIT;
 }
 
 export function hasExaApiKey(): boolean {
@@ -436,7 +441,7 @@ function extractHttpStatus(message: string): number {
 }
 
 /** API呼び出し本体（budgetチェック付き） */
-async function tryExaApi(
+export async function tryExaApi(
 	query: string,
 	apiKey: string,
 	options: ExaSearchOptions,
