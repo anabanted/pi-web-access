@@ -139,6 +139,11 @@ export async function search(query: string, options: FullSearchOptions = {}): Pr
 		}
 	}
 
+	if (provider === "tavily") {
+		const result = await searchWithTavily(query, options);
+		return { ...result, provider: "tavily" };
+	}
+
 	const fallbackErrors: string[] = [];
 
 	if (provider !== "exa" && isExaAvailable()) {
