@@ -425,12 +425,22 @@ export function hasExaApiKey(): boolean {
 	return !!getApiKey();
 }
 
-export async function searchWithExa(query: string, options: ExaSearchOptions = {}): Promise<ExaSearchResult> {
-	const apiKey = getApiKey();
-	if (!apiKey) {
-		return searchWithExaMcp(query, options);
-	}
+function isAbortError(err: unknown): boolean {
+	const message = err instanceof Error ? err.message : String(err);
+	return message.toLowerCase().includes("abort");
+}
 
+function extractHttpStatus(message: string): number {
+	const match = message.match(/(?:error|status)\s*(\d{3})/i);
+	return match ? parseInt(match[1], 10) : 0;
+}
+
+/** API呼び出し本体（budgetチェック付き） */
+async function tryExaApi(
+	query: string,
+	apiKey: string,
+	options: ExaSearchOptions,
+): Promise<ExaSearchResult> {
 	const budget = reserveRequestBudget();
 	if (budget) return budget;
 
@@ -458,7 +468,17 @@ export async function searchWithExa(query: string, options: ExaSearchOptions = {
 
 			if (!response.ok) {
 				const errorText = await response.text();
-				throw new Error(`Exa API error ${response.status}: ${errorText.slice(0, 300)}`);
+				const status = response.status;
+				// 401はフォールバックしない（認証エラーなのでMCP重试しても意味がない）
+				if (status === 401) {
+					throw new Error(`Exa API error ${status}: ${errorText.slice(0, 300)}`);
+				}
+				// 429/402/5xx → nullを返して呼び出し元にフォールバックを委ねる
+				if ([429, 402, 500, 502, 503].includes(status)) {
+					activityMonitor.logComplete(activityId, status);
+					return null;
+				}
+				throw new Error(`Exa API error ${status}: ${errorText.slice(0, 300)}`);
 			}
 
 			const data = await response.json() as ExaAnswerResponse;
@@ -493,7 +513,15 @@ export async function searchWithExa(query: string, options: ExaSearchOptions = {
 
 		if (!response.ok) {
 			const errorText = await response.text();
-			throw new Error(`Exa API error ${response.status}: ${errorText.slice(0, 300)}`);
+			const status = response.status;
+			if (status === 401) {
+				throw new Error(`Exa API error ${status}: ${errorText.slice(0, 300)}`);
+			}
+			if ([429, 402, 500, 502, 503].includes(status)) {
+				activityMonitor.logComplete(activityId, status);
+				return null;
+			}
+			throw new Error(`Exa API error ${status}: ${errorText.slice(0, 300)}`);
 		}
 
 		const data = await response.json() as ExaSearchResponse;
@@ -512,9 +540,25 @@ export async function searchWithExa(query: string, options: ExaSearchOptions = {
 		const message = err instanceof Error ? err.message : String(err);
 		if (message.toLowerCase().includes("abort")) {
 			activityMonitor.logComplete(activityId, 0);
-		} else {
-			activityMonitor.logError(activityId, message);
 		}
 		throw err;
 	}
+}
+
+export async function searchWithExa(query: string, options: ExaSearchOptions = {}): Promise<ExaSearchResult> {
+	// 1. まずMCPを試す（APIキー有無に関わらず）
+	try {
+		const mcpResult = await searchWithExaMcp(query, options);
+		if (mcpResult) return mcpResult;
+	} catch (err) {
+		if (isAbortError(err)) throw err;
+		// MCP失敗 → 以下でAPIを試す
+	}
+
+	// 2. APIキーがなければ終了
+	const apiKey = getApiKey();
+	if (!apiKey) return null;
+
+	// 3. APIを試す
+	return tryExaApi(query, apiKey, options);
 }
