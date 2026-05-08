@@ -36,6 +36,7 @@ import { join } from "node:path";
 import { isPerplexityAvailable } from "./perplexity.js";
 import { isExaAvailable } from "./exa.js";
 import { isTavilyAvailable } from "./tavily.js";
+import { isBraveAvailable } from "./brave.js";
 import { isGeminiApiAvailable } from "./gemini-api.js";
 import { getActiveGoogleEmail, isGeminiWebAvailable } from "./gemini-web.js";
 import { isBrowserCookieAccessAllowed } from "./gemini-web-config.ts";
@@ -58,6 +59,7 @@ interface ProviderAvailability {
 	exa: boolean;
 	gemini: boolean;
 	tavily: boolean;
+	brave: boolean;
 }
 
 type WebSearchWorkflow = "none" | "summary-review";
@@ -157,6 +159,7 @@ async function getProviderAvailability(): Promise<ProviderAvailability> {
 		exa: isExaAvailable(),
 		gemini: isGeminiApiAvailable() || !!geminiWebAvail,
 		tavily: isTavilyAvailable(),
+		brave: isBraveAvailable(),
 	};
 }
 
@@ -178,6 +181,7 @@ function resolveProvider(
 	if (provider === "auto") {
 		if (available.exa) return "exa";
 		if (available.tavily) return "tavily";
+		if (available.brave) return "brave";
 		if (available.perplexity) return "perplexity";
 		if (available.gemini) return "gemini";
 		return "exa";
@@ -189,8 +193,15 @@ function resolveProvider(
 	}
 	if (provider === "tavily" && !available.tavily) {
 		if (available.exa) return "exa";
+		if (available.brave) return "brave";
 		if (available.perplexity) return "perplexity";
 		return available.gemini ? "gemini" : "tavily";
+	}
+	if (provider === "brave" && !available.brave) {
+		if (available.exa) return "exa";
+		if (available.tavily) return "tavily";
+		if (available.perplexity) return "perplexity";
+		return available.gemini ? "gemini" : "brave";
 	}
 	if (provider === "perplexity" && !available.perplexity) {
 		if (available.exa) return "exa";
@@ -1099,7 +1110,7 @@ export default function (pi: ExtensionAPI) {
 		name: "web_search",
 		label: "Web Search",
 		description:
-			`Search the web using Exa, Tavily, Perplexity AI, or Gemini. Returns an AI-synthesized answer with source citations. For comprehensive research, prefer queries (plural) with 2-4 varied angles over a single query — each query gets its own synthesized answer, so varying phrasing and scope gives much broader coverage. When includeContent is true, full page content is fetched in the background. Searches auto-open the interactive browser curator and stream results live; set workflow to "none" to skip curation. Provider auto-selects: Exa (MCP first, then API with key, or fallback), else Tavily (needs key), else Perplexity (needs key), else Gemini API (needs key), else Gemini Web (needs a supported Chromium-based browser login).`,
+			`Search the web using Exa, Tavily, Brave, Perplexity AI, or Gemini. Returns an AI-synthesized answer with source citations. For comprehensive research, prefer queries (plural) with 2-4 varied angles over a single query — each query gets its own synthesized answer, so varying phrasing and scope gives much broader coverage. When includeContent is true, full page content is fetched in the background. Searches auto-open the interactive browser curator and stream results live; set workflow to "none" to skip curation. Provider auto-selects: Exa (MCP first, then API with key, or fallback), else Tavily (needs key), else Brave (needs key), else Perplexity (needs key), else Gemini API (needs key), else Gemini Web (needs a supported Chromium-based browser login).`,
 		promptSnippet:
 			"Use for web research questions. Prefer {queries:[...]} with 2-4 varied angles over a single query for broader coverage.",
 		parameters: Type.Object({
@@ -1112,7 +1123,7 @@ export default function (pi: ExtensionAPI) {
 			),
 			domainFilter: Type.Optional(Type.Array(Type.String(), { description: "Limit to domains (prefix with - to exclude)" })),
 			provider: Type.Optional(
-				StringEnum(["auto", "perplexity", "gemini", "exa", "tavily"], { description: "Search provider (default: auto)" }),
+				StringEnum(["auto", "perplexity", "gemini", "exa", "tavily", "brave"], { description: "Search provider (default: auto)" }),
 			),
 			workflow: Type.Optional(
 				StringEnum(["none", "summary-review"], {

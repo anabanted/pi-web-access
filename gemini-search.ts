@@ -7,8 +7,9 @@ import { isGeminiWebAvailable, queryWithCookies } from "./gemini-web.js";
 import { isPerplexityAvailable, searchWithPerplexity, type SearchResult, type SearchResponse, type SearchOptions } from "./perplexity.js";
 import { hasExaApiKey, isExaAvailable, searchWithExa } from "./exa.js";
 import { isTavilyAvailable, searchWithTavily } from "./tavily.js";
+import { isBraveAvailable, searchWithBrave } from "./brave.js";
 
-export type SearchProvider = "auto" | "perplexity" | "gemini" | "exa" | "tavily";
+export type SearchProvider = "auto" | "perplexity" | "gemini" | "exa" | "tavily" | "brave";
 export type ResolvedSearchProvider = Exclude<SearchProvider, "auto">;
 
 export interface AttributedSearchResponse extends SearchResponse {
@@ -58,7 +59,7 @@ function normalizeSearchModel(value: unknown): string | undefined {
 
 function normalizeSearchProvider(value: unknown): SearchProvider {
 	const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
-	return normalized === "auto" || normalized === "perplexity" || normalized === "gemini" || normalized === "exa" || normalized === "tavily"
+	return normalized === "auto" || normalized === "perplexity" || normalized === "gemini" || normalized === "exa" || normalized === "tavily" || normalized === "brave"
 		? normalized
 		: "auto";
 }
@@ -144,6 +145,11 @@ export async function search(query: string, options: FullSearchOptions = {}): Pr
 		return { ...result, provider: "tavily" };
 	}
 
+	if (provider === "brave") {
+		const result = await searchWithBrave(query, options);
+		return { ...result, provider: "brave" };
+	}
+
 	const fallbackErrors: string[] = [];
 
 	if (provider !== "exa" && isExaAvailable()) {
@@ -163,6 +169,16 @@ export async function search(query: string, options: FullSearchOptions = {}): Pr
 		} catch (err) {
 			if (isAbortError(err)) throw err;
 			fallbackErrors.push(`Tavily: ${errorMessage(err)}`);
+		}
+	}
+
+	if (isBraveAvailable()) {
+		try {
+			const result = await searchWithBrave(query, options);
+			return { ...result, provider: "brave" };
+		} catch (err) {
+			if (isAbortError(err)) throw err;
+			fallbackErrors.push(`Brave: ${errorMessage(err)}`);
 		}
 	}
 
@@ -193,8 +209,9 @@ export async function search(query: string, options: FullSearchOptions = {}): Pr
 		"  1. Set perplexityApiKey in ~/.pi/web-search.json\n" +
 		"  2. Set EXA_API_KEY (or exaApiKey) in ~/.pi/web-search.json\n" +
 		"  3. Set tavilyApiKey in ~/.pi/web-search.json\n" +
-		"  4. Set GEMINI_API_KEY in ~/.pi/web-search.json\n" +
-		"  5. Sign into gemini.google.com in a supported Chromium-based browser"
+		"  4. Set braveApiKey in ~/.pi/web-search.json\n" +
+		"  5. Set GEMINI_API_KEY in ~/.pi/web-search.json\n" +
+		"  6. Sign into gemini.google.com in a supported Chromium-based browser"
 	);
 }
 
